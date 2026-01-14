@@ -1,0 +1,138 @@
+Part 1: Azure Portal Configuration (Same Tenant)
+Step 1: Create VNet
+
+Go to Azure Portal → Virtual Networks → Create.
+Name: vnet-foundry-mcp.
+Address space: 10.70.0.0/16.
+Add subnets:
+
+app-snet → 10.70.1.0/24 (for App Service).
+pe-snet → 10.70.2.0/27 (for Private Endpoints).
+
+
+
+Step 2: Deploy App Service for MCP
+
+App Services → Create:
+
+Runtime: Python 3.10 (Linux).
+Plan: Basic (B1) or Free for testing.
+
+Deploy your FastMCP code (we’ll give snippet below).
+After deployment:
+
+Go to Networking → Access Restrictions → Disable public access later.
+
+
+
+
+Step 3: Add Private Endpoint for App Service
+
+In App Service → Networking → Private Endpoint → Add.
+Select pe-snet in your VNet.
+Create Private DNS zone: privatelink.azurewebsites.net.
+Link DNS zone to your VNet.
+
+✅ Test: nslookup <webapp>.azurewebsites.net → private IP.
+
+Step 4: Create Azure OpenAI
+
+Azure OpenAI → Create (requires approval).
+Disable Public network access.
+Add Private Endpoint in pe-snet.
+Create Private DNS zone: privatelink.openai.azure.com.
+Link DNS zone to VNet.
+
+
+Step 5: Create API Management (AI Gateway)
+
+API Management → Create.
+Add API that proxies AOAI (Azure OpenAI)backend.
+(Optional) Add Private Endpoint for APIM (Azure API Management) inbound.
+Create Private DNS zone: privatelink.azure-api.net if APIM is private.
+
+
+Step 6: Foundry BYO VNet
+
+In Foundry (classic) portal:
+
+Create Agent Service with BYO VNet.
+Select the same VNet (vnet-foundry-mcp).
+
+
+Foundry agent now runs inside your VNet and can resolve private DNS.
+
+
+✅ Part 2: Python FastMCP Code Snippet
+Here’s your FastMCP server:
+Pythonfrom fastmcp import FastMCPimport osimport requestsmcp = FastMCP("MCP Math Service")@mcp.tooldef add(a: float, b: float) -> float:    """Add two numbers"""    return a + b@mcp.tooldef subtract(a: float, b: float) -> float:    """Subtract b from a"""    return a - b@mcp.tooldef summarize(text: str) -> str:    """    Summarize text using Azure OpenAI via APIM (AI Gateway).    Env vars:      APIM_BASE_URL, APIM_SUB_KEY, AOAI_DEPLOYMENT, AOAI_API_VERSION    """    base = os.getenv("APIM_BASE_URL")    sub_key = os.getenv("APIM_SUB_KEY")    dep = os.getenv("AOAI_DEPLOYMENT")    ver = os.getenv("AOAI_API_VERSION", "2024-10-01-preview")    url = f"{base}/openai/deployments/{dep}/chat/completions?api-version={ver}"    payload = {        "messages": [            {"role": "system", "content": "You are a concise summarizer."},            {"role": "user", "content": f"Summarize: {text}"}        ],        "temperature": 0.2    }    headers = {        "Content-Type": "application/json",        "Ocp-Apim-Subscription-Key": sub_key    }    r = requests.post(url, json=payload, headers=headers, timeout=15)    r.raise_for_status()    return r.json().get("choices", [{}])[0].get("message", {}).get("content", "")if __name__ == "__main__":    mcp.run()Show more lines
+✅ Deploy this to App Service using Zip Deploy or GitHub Actions.
+
+✅ Part 3: Foundry Workflow
+
+Create HTTP Connector:
+
+Base URL: https://<webapp>.azurewebsites.net.
+
+
+Actions:
+
+POST /tools/add → { "a": "{{workflow.input.a}}", "b": "{{workflow.input.b}}" }
+POST /tools/summarize → { "text": "Result is {{steps.add.result}}" }
+
+
+
+✅ All calls stay private because Foundry agent, MCP, AOAI, and APIM share the same VNet.
+
+👉 Do you want me to give you the exact portal clicks for APIM + AOAI setup and Foundry connector JSON template next? Or generate a Terraform script for the entire setup?
+
+
+
+from fastmcp import FastMCP
+import os
+import requests
+
+mcp = FastMCP("MCP Math Service")
+
+@mcp.tool
+def add(a: float, b: float) -> float:
+    """Add two numbers"""
+    return a + b
+
+@mcp.tool
+def subtract(a: float, b: float) -> float:
+    """Subtract b from a"""
+    return a - b
+
+@mcp.tool
+def summarize(text: str) -> str:
+    """
+    Summarize text using Azure OpenAI via APIM (AI Gateway).
+    Env vars:
+      APIM_BASE_URL, APIM_SUB_KEY, AOAI_DEPLOYMENT, AOAI_API_VERSION
+    """
+    base = os.getenv("APIM_BASE_URL")
+    sub_key = os.getenv("APIM_SUB_KEY")
+    dep = os.getenv("AOAI_DEPLOYMENT")
+    ver = os.getenv("AOAI_API_VERSION", "2024-10-01-preview")
+
+    url = f"{base}/openai/deployments/{dep}/chat/completions?api-version={ver}"
+    payload = {
+        "messages": [
+            {"role": "system", "content": "You are a concise summarizer."},
+            {"role": "user", "content": f"Summarize: {text}"}
+        ],
+        "temperature": 0.2
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Ocp-Apim-Subscription-Key": sub_key
+    }
+    r = requests.post(url, json=payload, headers=headers, timeout=15)
+    r.raise_for_status()
+    return r.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+
+if __name__ == "__main__":
+    mcp.run()
+
+
