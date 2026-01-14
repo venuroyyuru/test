@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "add",
+    "arguments": { "a": 5, "b": 10 }
+  }
+}
+
